@@ -2,11 +2,214 @@
 Asset simulation module for PV, Battery, and EV.
 """
 
-from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, Literal
+from enum import Enum
 
 import numpy as np
 import pandas as pd
+
+
+class RoofType(Enum):
+    """Types of roof configurations."""
+    FLAT = "flat"
+    GABLE = "gable"  # Two-sided pitched roof
+    HIP = "hip"      # Four-sided pitched roof
+    MONO = "mono"    # Single-pitched roof (shed style)
+
+
+class HeatWaterType(Enum):
+    """Hot water heating system types."""
+    ELECTRIC_BOILER = "electric_boiler"
+    HEAT_PUMP_BOILER = "heat_pump_boiler"
+    OTHER = "other"  # Oil, gas, wood, district heat
+
+
+class HeatingSystemType(Enum):
+    """Space heating system types."""
+    ELECTRIC = "electric"
+    HEAT_PUMP = "heat_pump"
+    OTHER = "other"  # Oil, gas, wood, district heat
+
+
+class CoolingType(Enum):
+    """Cooling/AC usage."""
+    YES = "yes"
+    NO = "no"
+    SOMETIMES = "sometimes"
+
+
+class Orientation(Enum):
+    """Roof orientation/azimuth."""
+    SOUTH = "south"
+    SOUTH_EAST = "south_east"
+    SOUTH_WEST = "south_west"
+    EAST = "east"
+    WEST = "west"
+    NORTH_EAST = "north_east"
+    NORTH_WEST = "north_west"
+    NORTH = "north"
+
+
+# Efficiency factors for different orientations (relative to South)
+ORIENTATION_FACTORS = {
+    Orientation.SOUTH: 1.00,
+    Orientation.SOUTH_EAST: 0.95,
+    Orientation.SOUTH_WEST: 0.95,
+    Orientation.EAST: 0.80,
+    Orientation.WEST: 0.80,
+    Orientation.NORTH_EAST: 0.55,
+    Orientation.NORTH_WEST: 0.55,
+    Orientation.NORTH: 0.45,
+}
+
+# Efficiency factors for roof inclination (optimal is ~35° for Luxembourg)
+INCLINATION_FACTORS = {
+    0: 0.87,    # Flat
+    10: 0.93,
+    15: 0.95,
+    20: 0.97,
+    25: 0.99,
+    30: 1.00,   # Near optimal
+    35: 1.00,   # Optimal
+    40: 0.99,
+    45: 0.97,
+    50: 0.94,
+    60: 0.87,
+    70: 0.78,
+    80: 0.67,
+    90: 0.55,   # Vertical (wall-mounted)
+}
+
+# Panel efficiency: Watts per m² (modern panels ~200W/m²)
+PANEL_WATTS_PER_M2 = 200
+
+# Usable roof fraction by roof type
+USABLE_ROOF_FRACTION = {
+    RoofType.FLAT: 0.70,    # Some spacing needed for tilt mounting
+    RoofType.GABLE: 0.80,   # Good utilization on pitched roofs
+    RoofType.HIP: 0.60,     # Less usable due to hip ridges
+    RoofType.MONO: 0.85,    # Single slope is very efficient
+}
+
+
+@dataclass
+class PVSizingConfig:
+    """Configuration for PV system sizing based on property details."""
+    roof_surface_m2: float = 50.0
+    roof_type: RoofType = RoofType.GABLE
+    use_both_sides: bool = False  # For gable roofs
+    roof_inclination: int = 30  # degrees
+    orientation: Orientation = Orientation.SOUTH
+    heat_water: HeatWaterType = HeatWaterType.OTHER
+    heating_system: HeatingSystemType = HeatingSystemType.OTHER
+    cooling: CoolingType = CoolingType.NO
+    yearly_consumption_kwh: float = 4000.0
+
+
+def calculate_recommended_pv_size(config: PVSizingConfig) -> Dict[str, Any]:
+    """
+    Calculate recommended PV system size based on property configuration.
+    
+    Args:
+        config: PV sizing configuration with property details
+        
+    Returns:
+        Dictionary with recommended size, max possible, and factors
+    """
+    # Calculate usable roof area
+    base_area = config.roof_surface_m2
+    
+    # For gable roofs with both sides, double the area
+    if config.roof_type == RoofType.GABLE and config.use_both_sides:
+        effective_area = base_area * 2
+    else:
+        effective_area = base_area
+    
+    # Apply usable fraction based on roof type
+    usable_area = effective_area * USABLE_ROOF_FRACTION[config.roof_type]
+    
+    # Calculate maximum possible capacity from roof area (kWp)
+    max_capacity_from_roof = (usable_area * PANEL_WATTS_PER_M2) / 1000
+    
+    # Get efficiency factors
+    orientation_factor = ORIENTATION_FACTORS.get(config.orientation, 0.8)
+    
+    # Interpolate inclination factor
+    inclination_keys = sorted(INCLINATION_FACTORS.keys())
+    inclination = config.roof_inclination
+    if inclination <= inclination_keys[0]:
+        inclination_factor = INCLINATION_FACTORS[inclination_keys[0]]
+    elif inclination >= inclination_keys[-1]:
+        inclination_factor = INCLINATION_FACTORS[inclination_keys[-1]]
+    else:
+        # Linear interpolation
+        lower = max(k for k in inclination_keys if k <= inclination)
+        upper = min(k for k in inclination_keys if k >= inclination)
+        if lower == upper:
+            inclination_factor = INCLINATION_FACTORS[lower]
+        else:
+            ratio = (inclination - lower) / (upper - lower)
+            inclination_factor = (
+                INCLINATION_FACTORS[lower] * (1 - ratio) + 
+                INCLINATION_FACTORS[upper] * ratio
+            )
+    
+    # Combined efficiency factor
+    efficiency_factor = orientation_factor * inclination_factor
+    
+    # Calculate consumption-based recommendation
+    # Rule of thumb: 1 kWp produces ~950 kWh/year in Luxembourg
+    # Aim for 80-100% coverage of yearly consumption (adjusted by efficiency)
+    annual_yield_per_kwp = 950 * efficiency_factor
+    
+    # Adjust consumption based on heating/water systems
+    adjusted_consumption = config.yearly_consumption_kwh
+    
+    # Electric heating increases consumption significantly
+    if config.heating_system == HeatingSystemType.ELECTRIC:
+        adjusted_consumption *= 0.6  # Only cover part, heating is winter-heavy
+    elif config.heating_system == HeatingSystemType.HEAT_PUMP:
+        adjusted_consumption *= 0.8  # Heat pumps are more efficient
+    
+    # Hot water systems
+    if config.heat_water == HeatWaterType.ELECTRIC_BOILER:
+        adjusted_consumption += 1500  # Typical electric water heating
+    elif config.heat_water == HeatWaterType.HEAT_PUMP_BOILER:
+        adjusted_consumption += 500   # Efficient heat pump water heating
+    
+    # Cooling adds summer consumption (when PV is most productive)
+    if config.cooling == CoolingType.YES:
+        adjusted_consumption += 800
+    elif config.cooling == CoolingType.SOMETIMES:
+        adjusted_consumption += 300
+    
+    # Calculate ideal size to cover consumption
+    ideal_size_for_consumption = adjusted_consumption / annual_yield_per_kwp
+    
+    # Recommended size is minimum of roof capacity and consumption-based ideal
+    recommended_kwp = min(max_capacity_from_roof, ideal_size_for_consumption)
+    
+    # Round to nearest 0.5 kWp
+    recommended_kwp = round(recommended_kwp * 2) / 2
+    
+    # Ensure minimum of 2 kWp and maximum of 30 kWp
+    recommended_kwp = max(2.0, min(30.0, recommended_kwp))
+    max_capacity_from_roof = max(2.0, min(30.0, max_capacity_from_roof))
+    
+    return {
+        "recommended_kwp": recommended_kwp,
+        "max_from_roof_kwp": round(max_capacity_from_roof * 2) / 2,
+        "usable_roof_area_m2": round(usable_area, 1),
+        "efficiency_factor": round(efficiency_factor, 2),
+        "orientation_factor": round(orientation_factor, 2),
+        "inclination_factor": round(inclination_factor, 2),
+        "adjusted_consumption_kwh": round(adjusted_consumption, 0),
+        "estimated_annual_production_kwh": round(recommended_kwp * annual_yield_per_kwp, 0),
+        "coverage_percent": round(
+            (recommended_kwp * annual_yield_per_kwp / config.yearly_consumption_kwh) * 100, 0
+        ),
+    }
 
 
 @dataclass
@@ -14,6 +217,10 @@ class PVSystem:
     """Solar PV system configuration."""
     capacity_kwp: float = 0.0
     enabled: bool = False
+    # Extended configuration from sizing
+    orientation: Orientation = Orientation.SOUTH
+    roof_inclination: int = 30
+    efficiency_factor: float = 1.0
 
 
 @dataclass
@@ -96,8 +303,11 @@ def simulate_pv_generation(
     hourly_fraction = np.array([DEFAULT_PV_PROFILE[h] for h in hours])
     seasonal_fraction = np.array([SEASONAL_FACTORS[m] for m in months])
     
-    # Total annual generation expectation
-    total_annual_kwh = pv.capacity_kwp * ANNUAL_YIELD_PER_KWP
+    # Apply efficiency factor from orientation and inclination
+    efficiency = pv.efficiency_factor
+    
+    # Total annual generation expectation (adjusted by efficiency)
+    total_annual_kwh = pv.capacity_kwp * ANNUAL_YIELD_PER_KWP * efficiency
     
     # Number of 15-min intervals in a year
     intervals_per_year = 365.25 * 24 * 4

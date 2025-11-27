@@ -20,7 +20,7 @@ COLORS = {
     "grid_export": "#95E1D3",      # Teal
     "ev": "#9B59B6",               # Purple
     "baseline": "#6c757d",         # Dark gray
-    "savings": "#28a745",          # Green
+    "savings": "#7DD3A3",          # Pastel mint green
 }
 
 TARIFF_COLORS = {
@@ -76,7 +76,7 @@ def create_bill_comparison_chart(
         marker_color=COLORS["savings"],
         text=[f"€{v:,.0f}" for v in with_assets_values],
         textposition="inside",
-        textfont=dict(color="white", size=12),
+        textfont=dict(color="#1a1a2e", size=12, weight="bold"),
         insidetextanchor="middle",
     ))
     
@@ -135,7 +135,7 @@ def create_savings_chart(
         marker_color=[COLORS["savings"] if s > 0 else COLORS["consumption"] for s in df["savings"]],
         text=[f"€{s:,.0f} ({p:.0f}%)" for s, p in zip(df["savings"], df["percent"])],
         textposition="inside",
-        textfont=dict(color="white", size=11),
+        textfont=dict(color=["#1a1a2e" if s > 0 else "white" for s in df["savings"]], size=11, weight="bold"),
         insidetextanchor="middle",
     ))
     
@@ -393,8 +393,8 @@ def create_energy_flow_chart(
             source=[0, 0, 1, 2, 1],  # PV, PV, Grid, Self-consumed, Grid
             target=[2, 3, 4, 4, 4],  # Self-consumed, Export, Consumption, Consumption, Consumption
             value=[self_consumed, grid_export, grid_import, self_consumed, 0],
-            color=["rgba(255, 217, 61, 0.4)", "rgba(149, 225, 211, 0.4)", 
-                   "rgba(201, 203, 207, 0.4)", "rgba(107, 203, 119, 0.4)", "rgba(0,0,0,0)"],
+            color=["rgba(255, 217, 61, 0.6)", "rgba(149, 225, 211, 0.6)", 
+                   "rgba(201, 203, 207, 0.7)", "rgba(107, 203, 119, 0.6)", "rgba(0,0,0,0)"],
         ),
     )])
     
@@ -515,7 +515,7 @@ def create_battery_soc_chart(
         name="Battery SOC",
         fill="tozeroy",
         line=dict(color=COLORS["battery_charge"], width=2),
-        fillcolor=f"rgba(107, 203, 119, 0.3)",
+        fillcolor=f"rgba(107, 203, 119, 0.6)",
     ))
     
     fig.update_layout(
