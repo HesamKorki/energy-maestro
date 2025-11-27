@@ -1,0 +1,117 @@
+# Energy Tariff Configuration
+# All prices are in EUR/kWh unless otherwise specified
+
+dynamic:
+  name: "Dynamic Tariff"
+  description: "Hourly prices that follow the spot market"
+  base_fee_monthly: 13.0  # EUR/month
+  # Typical hourly prices (EUR/kWh) - varies by hour of day
+  # Lower at night, higher during peak hours
+  prices_by_hour:
+    - 0.08   # 00:00
+    - 0.07   # 01:00
+    - 0.06   # 02:00
+    - 0.06   # 03:00
+    - 0.06   # 04:00
+    - 0.07   # 05:00
+    - 0.10   # 06:00
+    - 0.15   # 07:00
+    - 0.20   # 08:00
+    - 0.22   # 09:00
+    - 0.18   # 10:00
+    - 0.16   # 11:00
+    - 0.14   # 12:00
+    - 0.13   # 13:00
+    - 0.14   # 14:00
+    - 0.16   # 15:00
+    - 0.18   # 16:00
+    - 0.25   # 17:00
+    - 0.30   # 18:00
+    - 0.28   # 19:00
+    - 0.22   # 20:00
+    - 0.16   # 21:00
+    - 0.12   # 22:00
+    - 0.10   # 23:00
+  # Feed-in tariff for exported solar energy
+  feed_in_tariff: 0.045  # EUR/kWh
+
+fixed_3year:
+  name: "Fixed 3-Year"
+  description: "Constant rate locked for 3 years - price stability"
+  base_fee_monthly: 4  # EUR/month
+  rate: 0.12303  # EUR/kWh - flat rate all day
+  # No feed-in tariff available for this plan
+
+daily_fix:
+  name: "Day/Night Tariff"
+  description: "Different rates for day and night hours"
+  base_fee_monthly: 11.0  # EUR/month
+  day_rate: 0.12563    # EUR/kWh - 06:00 to 22:00
+  night_rate: 0.11333  # EUR/kWh - 22:00 to 06:00
+  day_start_hour: 8
+  day_end_hour: 20
+  # No feed-in tariff available for this plan
+
+# Asset configurations (for reference/defaults)
+assets:
+  pv:
+    # Typical solar generation profile (fraction of peak capacity by hour)
+    generation_profile:
+      - 0.00   # 00:00
+      - 0.00   # 01:00
+      - 0.00   # 02:00
+      - 0.00   # 03:00
+      - 0.00   # 04:00
+      - 0.00   # 05:00
+      - 0.05   # 06:00
+      - 0.15   # 07:00
+      - 0.35   # 08:00
+      - 0.55   # 09:00
+      - 0.75   # 10:00
+      - 0.90   # 11:00
+      - 1.00   # 12:00 (peak)
+      - 0.95   # 13:00
+      - 0.85   # 14:00
+      - 0.70   # 15:00
+      - 0.50   # 16:00
+      - 0.30   # 17:00
+      - 0.15   # 18:00
+      - 0.05   # 19:00
+      - 0.00   # 20:00
+      - 0.00   # 21:00
+      - 0.00   # 22:00
+      - 0.00   # 23:00
+    # Seasonal factors (multiply generation profile)
+    seasonal_factors:
+      jan: 0.3
+      feb: 0.4
+      mar: 0.6
+      apr: 0.8
+      may: 0.95
+      jun: 1.0
+      jul: 1.0
+      aug: 0.95
+      sep: 0.75
+      oct: 0.5
+      nov: 0.35
+      dec: 0.25
+    # Annual kWh production per kWp installed (for Luxembourg region)
+    annual_yield_per_kwp: 950
+
+  battery:
+    # Efficiency for charging and discharging
+    charge_efficiency: 0.95
+    discharge_efficiency: 0.95
+    # Max charge/discharge rate as fraction of capacity per hour
+    max_charge_rate: 0.5  # Can charge 50% of capacity per hour
+    max_discharge_rate: 0.5
+
+  ev:
+    # Average consumption per 100 km
+    consumption_per_100km: 18  # kWh
+    # Charging power (home charger)
+    charging_power_kw: 7.4  # kW (typical home wallbox)
+    # Default charging hours (when connected at home)
+    charging_start_hour: 18
+    charging_end_hour: 7
+
