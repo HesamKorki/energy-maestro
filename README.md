@@ -19,6 +19,10 @@ A Streamlit-based tool to help households understand how adding solar PV, batter
   - Self-sufficiency metrics
   - Monthly cost trends
 
+## Architecture
+
+![Architecture](img/arch.jpg)
+
 ## Installation
 
 ```bash

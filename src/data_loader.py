@@ -141,6 +141,11 @@ def get_consumption_summary(df: pd.DataFrame) -> Dict[str, float]:
     
     # Calculate daily consumption
     daily = df.resample("D")["consumption_kwh"].sum()
+    days_of_data = len(daily)
+    
+    # Normalize to annual consumption (accounts for data spanning multiple years)
+    years_of_data = days_of_data / 365.0
+    annual_kwh = total_kwh / years_of_data if years_of_data > 0 else total_kwh
     
     # Peak 15-min consumption
     peak_15min = df["consumption_kwh"].max()
@@ -149,12 +154,12 @@ def get_consumption_summary(df: pd.DataFrame) -> Dict[str, float]:
     peak_power_kw = peak_15min * 4  # kWh per 15 min * 4 = kW
     
     return {
-        "total_annual_kwh": round(total_kwh, 1),
+        "total_annual_kwh": round(annual_kwh, 1),
         "avg_daily_kwh": round(daily.mean(), 2),
         "max_daily_kwh": round(daily.max(), 2),
         "min_daily_kwh": round(daily.min(), 2),
         "peak_power_kw": round(peak_power_kw, 2),
-        "days_of_data": len(daily),
+        "days_of_data": days_of_data,
     }
 
 
