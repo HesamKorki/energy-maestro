@@ -71,3 +71,52 @@ hackaton/
 Customer consumption files should be CSV with two columns:
 - `timestamp`: DateTime in format `YYYY-MM-DD HH:MM:SS`
 - `value`: Consumption in kWh for each 15-minute interval
+
+## Database Setup (Optional)
+
+The app can read customer data from PostgreSQL instead of CSV files.
+
+### Local Development with Docker
+
+```bash
+# Start PostgreSQL
+docker compose up -d
+
+# Load CSV data into the database
+python scripts/load_csv_to_postgres.py
+```
+
+### Production (RDS)
+
+In production, the database and data already exist. Just configure the environment variables to point to your RDS instance - no initialization needed.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_HOST` | `localhost` | Database host (use RDS endpoint for production) |
+| `POSTGRES_PORT` | `5432` | Database port |
+| `POSTGRES_USER` | `energy` | Database user |
+| `POSTGRES_PASSWORD` | `energy123` | Database password |
+| `POSTGRES_DB` | `energy_maestro` | Database name |
+
+### Database Schema
+
+```sql
+-- Customer consumption data
+CREATE TABLE metrics (
+    ts TIMESTAMP,
+    value NUMERIC,
+    customer_id TEXT
+);
+
+-- Market prices (EPEX spot prices)
+CREATE TABLE market_prices (
+    id SERIAL PRIMARY KEY,
+    ts TIMESTAMP NOT NULL,
+    price_eur_per_kwh NUMERIC NOT NULL
+);
+```
+
+- Customer data: each row has `customer_id` (e.g., `customer_1`)
+- Market prices: 15-minute interval spot prices in EUR/kWh

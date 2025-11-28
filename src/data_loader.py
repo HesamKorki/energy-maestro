@@ -1,58 +1,116 @@
 """
 Data loader module for consumption data and tariff configuration.
+Reads customer data from PostgreSQL database.
 """
 
+import os
 from pathlib import Path
 from functools import lru_cache
 from typing import Dict, Any
 
 import pandas as pd
+import psycopg2
 import yaml
 
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "customers"
-MARKET_DIR = Path(__file__).parent.parent / "data" / "market"
 CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+
+def _get_db_connection():
+    """
+    Create a PostgreSQL database connection.
+    
+    Returns:
+        psycopg2 connection object
+    """
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        user=os.getenv("POSTGRES_USER", "energy"),
+        password=os.getenv("POSTGRES_PASSWORD", "energy123"),
+        dbname=os.getenv("POSTGRES_DB", "energy_maestro"),
+    )
 
 
 @lru_cache(maxsize=10)
 def load_customer_data(customer_id: str) -> pd.DataFrame:
     """
-    Load consumption data for a customer.
+    Load consumption data for a customer from PostgreSQL.
     
     Args:
-        customer_id: Customer identifier (e.g., 'customer_1')
+        customer_id: Customer identifier
     
     Returns:
         DataFrame with timestamp index and consumption values
     """
-    file_path = DATA_DIR / f"{customer_id}.csv"
+    try:
+        conn = _get_db_connection()
+    except psycopg2.OperationalError as e:
+        raise ConnectionError(
+            f"Cannot connect to PostgreSQL database. "
+            f"Make sure the database is running (docker compose up -d). "
+            f"Error: {e}"
+        ) from e
     
-    df = pd.read_csv(file_path, parse_dates=["timestamp"])
-    df.set_index("timestamp", inplace=True)
-    df.columns = ["consumption_kwh"]
-    
-    # Ensure the data is sorted by timestamp
-    df.sort_index(inplace=True)
-    
-    return df
+    try:
+        query = """
+            SELECT ts as timestamp, value as consumption_kwh
+            FROM metrics
+            WHERE customer_id = %s
+            ORDER BY ts
+        """
+        df = pd.read_sql(query, conn, params=(customer_id,), parse_dates=["timestamp"])
+        df.set_index("timestamp", inplace=True)
+        
+        if df.empty:
+            raise ValueError(
+                f"No data found for customer '{customer_id}'. "
+                f"Make sure data is loaded in the database."
+            )
+        
+        return df
+    finally:
+        conn.close()
 
 
 def get_available_customers() -> Dict[str, str]:
     """
-    Get list of available customers with display names.
+    Get list of available customers from PostgreSQL.
     
     Returns:
         Dictionary mapping customer_id to display name
     """
-    customers = {}
-    for file_path in sorted(DATA_DIR.glob("customer_*.csv")):
-        customer_id = file_path.stem
-        # Create a friendly display name
-        customer_num = customer_id.split("_")[1]
-        customers[customer_id] = f"Household {customer_num}"
+    try:
+        conn = _get_db_connection()
+    except psycopg2.OperationalError as e:
+        raise ConnectionError(
+            f"Cannot connect to PostgreSQL database. "
+            f"Make sure the database is running (docker compose up -d). "
+            f"Error: {e}"
+        ) from e
     
-    return customers
+    try:
+        query = "SELECT DISTINCT customer_id FROM metrics ORDER BY customer_id"
+        df = pd.read_sql(query, conn)
+        
+        if df.empty:
+            raise ValueError(
+                "No customers found in database. "
+                "Run 'python scripts/load_csv_to_postgres.py' to load data."
+            )
+        
+        customers = {}
+        for customer_id in df["customer_id"]:
+            # Create a friendly display name
+            if customer_id.startswith("customer_"):
+                customer_num = customer_id.split("_")[1]
+                customers[customer_id] = f"Household {customer_num}"
+            else:
+                customers[customer_id] = customer_id
+        
+        return customers
+    finally:
+        conn.close()
 
 
 def load_tariffs() -> Dict[str, Any]:
@@ -157,45 +215,31 @@ def get_weekly_profile(df: pd.DataFrame) -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def load_market_prices() -> pd.DataFrame:
     """
-    Load EPEX spot market prices from CSV files.
+    Load EPEX spot market prices from PostgreSQL.
     
     Returns:
         DataFrame with timestamp index and price_eur_per_kwh column
     """
-    dfs = []
+    try:
+        conn = _get_db_connection()
+    except psycopg2.OperationalError as e:
+        raise ConnectionError(
+            f"Cannot connect to PostgreSQL database. "
+            f"Make sure the database is running (docker compose up -d). "
+            f"Error: {e}"
+        ) from e
     
-    # Look for Day-ahead price files
-    for file_path in sorted(MARKET_DIR.glob("Day-ahead_prices_*.csv")):
-        df = pd.read_csv(file_path, sep=";", low_memory=False)
-        dfs.append(df)
-    
-    if not dfs:
-        return pd.DataFrame()
-    
-    # Combine all years
-    market_df = pd.concat(dfs, ignore_index=True)
-    
-    # Parse timestamps from "Start date" column (format: "Jan 1, 2022 12:00 AM")
-    market_df["timestamp"] = pd.to_datetime(market_df["Start date"], format="%b %d, %Y %I:%M %p")
-    
-    # Get the Germany/Luxembourg price column
-    price_col = "Germany/Luxembourg [€/MWh] Original resolutions"
-    
-    # Convert EUR/MWh to EUR/kWh
-    market_df["price_eur_per_kwh"] = pd.to_numeric(market_df[price_col], errors="coerce") / 1000.0
-    
-    # Keep only relevant columns and set index
-    result = market_df[["timestamp", "price_eur_per_kwh"]].copy()
-    result.set_index("timestamp", inplace=True)
-    result.sort_index(inplace=True)
-    
-    # Remove any duplicate timestamps (keep first)
-    result = result[~result.index.duplicated(keep="first")]
-    
-    # Drop any NaN prices
-    result = result.dropna()
-    
-    return result
+    try:
+        query = """
+            SELECT ts as timestamp, price_eur_per_kwh
+            FROM market_prices
+            ORDER BY ts
+        """
+        df = pd.read_sql(query, conn, parse_dates=["timestamp"])
+        df.set_index("timestamp", inplace=True)
+        return df
+    finally:
+        conn.close()
 
 
 def get_market_prices_for_period(
@@ -219,4 +263,3 @@ def get_market_prices_for_period(
     
     mask = (market_df.index >= start_date) & (market_df.index <= end_date)
     return market_df[mask]
-
