@@ -33,9 +33,6 @@ from src.assets import (
     get_self_sufficiency_metrics,
     PVSizingConfig,
     RoofType,
-    HeatWaterType,
-    HeatingSystemType,
-    CoolingType,
     Orientation,
     calculate_recommended_pv_size,
     ORIENTATION_FACTORS,
@@ -55,6 +52,7 @@ from src.charts import (
     create_self_sufficiency_gauge,
     create_battery_soc_chart,
 )
+from src.chat import chat_with_bedrock
 
 
 # Page configuration
@@ -197,6 +195,32 @@ st.markdown("""
         border-radius: 12px;
         box-shadow: 0 2px 10px rgba(0,0,0,0.05);
     }
+    
+    /* AI Chat button - circular goldish orange */
+    .chat-button-container button {
+        background: linear-gradient(135deg, #F4A020 0%, #E8850C 100%) !important;
+        border: none !important;
+        border-radius: 50% !important;
+        width: 60px !important;
+        height: 60px !important;
+        padding: 0 !important;
+        font-size: 1.5rem !important;
+        color: white !important;
+        box-shadow: 0 4px 15px rgba(244, 160, 32, 0.4) !important;
+        transition: all 0.3s ease !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    .chat-button-container button:hover {
+        background: linear-gradient(135deg, #FFB830 0%, #F4A020 100%) !important;
+        box-shadow: 0 6px 20px rgba(244, 160, 32, 0.5) !important;
+        transform: scale(1.05) !important;
+    }
+    .chat-button-container button p {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -204,13 +228,31 @@ st.markdown("""
 def main():
     """Main application entry point."""
     
-    # Header
-    st.markdown("""
-    <div class="main-header">
-        <h1>Energy Maestro</h1>
-        <p>Explore how solar panels, batteries, and EVs could transform your energy costs</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Header with chat button
+    header_col, chat_btn_col = st.columns([6, 1])
+    
+    with header_col:
+        st.markdown("""
+        <div class="main-header">
+            <h1>Energy Maestro</h1>
+            <p>Explore how solar panels, batteries, and EVs could transform your energy costs</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with chat_btn_col:
+        # Initialize chat state early
+        if "chat_messages" not in st.session_state:
+            st.session_state.chat_messages = []
+        if "chat_open" not in st.session_state:
+            st.session_state.chat_open = False
+        
+        st.markdown("<div style='height: 20px'></div>", unsafe_allow_html=True)
+        chat_icon = "✕" if st.session_state.chat_open else "AI Assistant 💬"
+        st.markdown('<div class="chat-button-container">', unsafe_allow_html=True)
+        if st.button(chat_icon, key="toggle_chat_top", help="AI Energy Advisor"):
+            st.session_state.chat_open = not st.session_state.chat_open
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Load configuration
     tariffs = load_tariffs()
@@ -320,60 +362,13 @@ def main():
                 )
                 pv_orientation = orientation_options[pv_orientation_label]
                 
-                st.markdown("##### 🔥 Energy Systems")
-                
-                # Heat water
-                heat_water_options = {
-                    "Electric Boiler": HeatWaterType.ELECTRIC_BOILER,
-                    "Heat Pump Boiler": HeatWaterType.HEAT_PUMP_BOILER,
-                    "Other (oil, gas, wood, district)": HeatWaterType.OTHER,
-                }
-                pv_heat_water_label = st.selectbox(
-                    "Hot Water System",
-                    options=list(heat_water_options.keys()),
-                    index=2,
-                    help="How do you heat your water?"
-                )
-                pv_heat_water = heat_water_options[pv_heat_water_label]
-                
-                # Heating system
-                heating_options = {
-                    "Electric Heating": HeatingSystemType.ELECTRIC,
-                    "Heat Pump": HeatingSystemType.HEAT_PUMP,
-                    "Other (oil, gas, wood, district)": HeatingSystemType.OTHER,
-                }
-                pv_heating_label = st.selectbox(
-                    "Heating System",
-                    options=list(heating_options.keys()),
-                    index=2,
-                    help="How do you heat your home?"
-                )
-                pv_heating = heating_options[pv_heating_label]
-                
-                # Cooling
-                cooling_options = {
-                    "Yes (regular AC use)": CoolingType.YES,
-                    "Sometimes (occasional use)": CoolingType.SOMETIMES,
-                    "No": CoolingType.NO,
-                }
-                pv_cooling_label = st.selectbox(
-                    "Air Conditioning",
-                    options=list(cooling_options.keys()),
-                    index=2,
-                    help="Do you use air conditioning?"
-                )
-                pv_cooling = cooling_options[pv_cooling_label]
-                
-                # Calculate recommended size using actual consumption data
+                # Calculate recommended size using actual consumption data and roof config
                 pv_config = PVSizingConfig(
                     roof_surface_m2=float(pv_roof_surface),
                     roof_type=pv_roof_type,
                     use_both_sides=pv_use_both_sides,
                     roof_inclination=pv_inclination,
                     orientation=pv_orientation,
-                    heat_water=pv_heat_water,
-                    heating_system=pv_heating,
-                    cooling=pv_cooling,
                     yearly_consumption_kwh=yearly_consumption_kwh,
                 )
                 
@@ -462,45 +457,71 @@ def main():
         st.markdown("---")
         st.markdown("## 🔋 Battery Storage")
         
-        battery_enabled = st.toggle("Enable Battery", value=False)
-        battery_capacity = st.slider(
-            "Capacity (kWh)",
-            min_value=5.0,
-            max_value=20.0,
-            value=10.0,
-            step=1.0,
-            disabled=not battery_enabled,
-            help="Typical home batteries: 5-15 kWh"
-        )
+        # Battery only makes sense with PV - it charges from excess solar
+        if not pv_enabled:
+            st.caption("⚠️ *Enable PV system first to add battery storage*")
+            battery_enabled = False
+            battery_capacity = 10.0
+        else:
+            battery_enabled = st.toggle("Enable Battery", value=False)
+            battery_capacity = st.slider(
+                "Capacity (kWh)",
+                min_value=5.0,
+                max_value=20.0,
+                value=10.0,
+                step=1.0,
+                disabled=not battery_enabled,
+                help="Typical home batteries: 5-15 kWh. Charges from excess solar during the day."
+            )
         
         st.markdown("---")
         st.markdown("## 🚗 Electric Vehicle")
         
         ev_enabled = st.toggle("Enable EV", value=False)
-        ev_km = st.slider(
-            "Annual Driving (km)",
-            min_value=5000,
-            max_value=30000,
-            value=15000,
-            step=1000,
+        
+        ev_battery_capacity = st.slider(
+            "Battery Capacity (kWh)",
+            min_value=30.0,
+            max_value=100.0,
+            value=60.0,
+            step=5.0,
             disabled=not ev_enabled,
-            help="Average annual driving distance"
+            help="EV battery size (e.g., Tesla Model 3: 60kWh, Model Y: 75kWh)"
         )
         
-        # Charging schedule (expandable)
+        # Charging configuration (expandable)
         if ev_enabled:
-            with st.expander("Charging Schedule"):
+            with st.expander("⚡ Charging Configuration"):
+                ev_charging_power = st.select_slider(
+                    "Charging Power (kW)",
+                    options=[2.3, 3.7, 4.0, 7.4, 11.0, 22.0],
+                    value=4.0,
+                    help="Home charger power (typical: 3.7-4kW single-phase, 11kW three-phase)"
+                )
+                
+                st.markdown("##### 🕐 Charging Schedule")
                 ev_charge_start = st.slider(
                     "Start Hour", 0, 23, 18,
-                    help="When EV starts charging"
+                    help="When EV arrives home and starts charging"
                 )
                 ev_charge_end = st.slider(
                     "End Hour", 0, 23, 7,
-                    help="When EV stops charging"
+                    help="When charging window ends"
                 )
+                
+                st.markdown("##### 🔋 Battery State")
+                st.caption("EV arrives home at **40% SOC** and charges to **80%** each day")
+                
+                # Calculate and show charging info
+                energy_per_session = ev_battery_capacity * 0.40  # 40% to 80% = 40%
+                charging_time_hours = energy_per_session / ev_charging_power
+                st.info(f"📊 Daily charge: **{energy_per_session:.1f} kWh** | "
+                       f"Time to charge: **{charging_time_hours:.1f} hours**")
         else:
             ev_charge_start = 18
             ev_charge_end = 7
+            ev_charging_power = 4.0
+        
     
     # Create asset configurations (consumption_df and consumption_summary loaded in sidebar)
     pv = PVSystem(
@@ -515,10 +536,13 @@ def main():
         enabled=battery_enabled
     )
     ev = EV(
-        annual_km=ev_km if ev_enabled else 0,
+        battery_capacity_kwh=ev_battery_capacity if ev_enabled else 0,
         enabled=ev_enabled,
+        charging_power_kw=ev_charging_power if ev_enabled else 7.4,
         charging_start_hour=ev_charge_start,
-        charging_end_hour=ev_charge_end
+        charging_end_hour=ev_charge_end,
+        starting_soc_pct=0.40,
+        target_soc_pct=0.80,
     )
     
     # Run simulation
@@ -622,6 +646,11 @@ def main():
         fig_savings = create_savings_chart(comparison)
         st.plotly_chart(fig_savings, use_container_width=True)
     
+    # Monthly costs breakdown
+    monthly_df = get_monthly_costs(simulated_df, tariffs)
+    fig_monthly = create_monthly_costs_chart(monthly_df)
+    st.plotly_chart(fig_monthly, use_container_width=True)
+    
     # Row 3: Self-Sufficiency Metrics (only if PV enabled)
     if pv_enabled:
         st.markdown('<div class="section-header">🔋 Self-Sufficiency Metrics</div>', unsafe_allow_html=True)
@@ -655,11 +684,19 @@ def main():
                     f"{metrics['grid_export_kwh']:,.0f} kWh",
                     help="Excess energy sold to grid"
                 )
+                
+                # Show battery contribution if enabled
+                if battery_enabled and metrics.get('battery_discharged_kwh', 0) > 0:
+                    st.metric(
+                        "🔋 Battery Used",
+                        f"{metrics['battery_discharged_kwh']:,.0f} kWh",
+                        help="Energy provided by battery (reduces grid import)"
+                    )
     
     # Row 4: Load Profiles
     st.markdown('<div class="section-header">📈 Energy Profiles</div>', unsafe_allow_html=True)
     
-    tab1, tab2, tab3 = st.tabs(["Weekly View", "Daily Average", "Monthly Costs"])
+    tab1, tab2 = st.tabs(["Weekly View", "Daily Average"])
     
     with tab1:
         # Date selector for load profile
@@ -701,11 +738,6 @@ def main():
         fig_daily = create_daily_profile_chart(simulated_df)
         st.plotly_chart(fig_daily, use_container_width=True)
     
-    with tab3:
-        monthly_df = get_monthly_costs(simulated_df, tariffs)
-        fig_monthly = create_monthly_costs_chart(monthly_df)
-        st.plotly_chart(fig_monthly, use_container_width=True)
-    
     # Footer with tariff details
     st.markdown('<div class="section-header">📋 Tariff Details</div>', unsafe_allow_html=True)
     
@@ -733,6 +765,56 @@ def main():
             day_end = tariffs['daily_fix'].get('day_end_hour', 22)
             st.write(f"Day ({day_start:02d}-{day_end:02d}h): €{tariffs['daily_fix']['day_rate']}/kWh")
             st.write(f"Night: €{tariffs['daily_fix']['night_rate']}/kWh")
+    
+    # ==================== AI Chat Panel (toggle from top button) ====================
+    # Build page context for the AI
+    page_context = {
+        "customer_id": customer_id,
+        "customer_name": customers.get(customer_id, customer_id),
+        "consumption_summary": consumption_summary,
+        "pv_enabled": pv_enabled,
+        "pv_capacity": pv_capacity if pv_enabled else 0,
+        "battery_enabled": battery_enabled,
+        "battery_capacity": battery_capacity if battery_enabled else 0,
+        "ev_enabled": ev_enabled,
+        "ev_battery_kwh": ev_battery_capacity if ev_enabled else 0,
+        "ev_charging_power_kw": ev_charging_power if ev_enabled else 0,
+        "best_tariff": best_tariff.get("tariff_name", ""),
+        "metrics": metrics if pv_enabled else {},
+    }
+    
+    # Show chat panel when open (button is at the top of the page)
+    if st.session_state.chat_open:
+        st.markdown("---")
+        st.markdown("### 🤖 AI Energy Advisor")
+        st.caption("Ask me about your energy data, tariffs, or recommendations!")
+        
+        chat_container = st.container(height=350)
+        
+        with chat_container:
+            if not st.session_state.chat_messages:
+                with st.chat_message("assistant"):
+                    st.markdown("👋 Hi! I'm your Energy Advisor. Ask me anything about your energy setup, tariffs, or how to save money!")
+            
+            for message in st.session_state.chat_messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+        
+        if prompt := st.chat_input("Ask about your energy...", key="main_chat"):
+            st.session_state.chat_messages.append({"role": "user", "content": prompt})
+            
+            with st.spinner("Thinking..."):
+                response = chat_with_bedrock(st.session_state.chat_messages, page_context)
+            
+            st.session_state.chat_messages.append({"role": "assistant", "content": response})
+            st.rerun()
+        
+        if st.session_state.chat_messages:
+            if st.button("🗑️ Clear Chat", key="clear_main_chat"):
+                st.session_state.chat_messages = []
+                st.rerun()
+        
+        st.markdown("---")
 
 
 if __name__ == "__main__":

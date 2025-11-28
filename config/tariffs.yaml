@@ -7,31 +7,6 @@ dynamic:
   base_fee_monthly: 13.0  # EUR/month
   # Typical hourly prices (EUR/kWh) - varies by hour of day
   # Lower at night, higher during peak hours
-  prices_by_hour:
-    - 0.08   # 00:00
-    - 0.07   # 01:00
-    - 0.06   # 02:00
-    - 0.06   # 03:00
-    - 0.06   # 04:00
-    - 0.07   # 05:00
-    - 0.10   # 06:00
-    - 0.15   # 07:00
-    - 0.20   # 08:00
-    - 0.22   # 09:00
-    - 0.18   # 10:00
-    - 0.16   # 11:00
-    - 0.14   # 12:00
-    - 0.13   # 13:00
-    - 0.14   # 14:00
-    - 0.16   # 15:00
-    - 0.18   # 16:00
-    - 0.25   # 17:00
-    - 0.30   # 18:00
-    - 0.28   # 19:00
-    - 0.22   # 20:00
-    - 0.16   # 21:00
-    - 0.12   # 22:00
-    - 0.10   # 23:00
   # Feed-in tariff for exported solar energy
   feed_in_tariff: 0.045  # EUR/kWh
 

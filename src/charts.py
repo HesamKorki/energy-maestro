@@ -199,13 +199,16 @@ def create_load_profile_chart(
             fillcolor=f"rgba(255, 217, 61, 0.4)",
         ))
     
-    # EV consumption
+    # EV consumption - show as filled area to make charging sessions visible
     if "ev_consumption_kwh" in plot_df.columns and plot_df["ev_consumption_kwh"].sum() > 0:
         fig.add_trace(go.Scatter(
             x=plot_df.index,
-            y=plot_df["ev_consumption_kwh"] * 4,
+            y=plot_df["ev_consumption_kwh"] * 4,  # Convert to kW
             name="EV Charging",
-            line=dict(color=COLORS["ev"], width=2, dash="dot"),
+            fill="tozeroy",
+            line=dict(color=COLORS["ev"], width=2),
+            fillcolor="rgba(155, 89, 182, 0.4)",
+            hovertemplate="EV Charging: %{y:.2f} kW<extra></extra>",
         ))
     
     fig.update_layout(
@@ -488,14 +491,14 @@ def create_battery_soc_chart(
     date_range: Optional[tuple] = None
 ) -> go.Figure:
     """
-    Create a battery state of charge chart.
+    Create a battery state of charge chart with charging/discharging indicators.
     
     Args:
         df: DataFrame with battery_soc column
         date_range: Optional date range filter
     
     Returns:
-        Plotly Figure
+        Plotly Figure with SOC line and charge/discharge activity
     """
     if "battery_soc" not in df.columns or df["battery_soc"].sum() == 0:
         return go.Figure()
@@ -507,27 +510,75 @@ def create_battery_soc_chart(
     else:
         plot_df = df.iloc[:7*24*4]
     
-    fig = go.Figure()
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        row_heights=[0.6, 0.4],
+        subplot_titles=("Battery State of Charge", "Battery Activity (Charge ↑ / Discharge ↓)")
+    )
     
-    fig.add_trace(go.Scatter(
-        x=plot_df.index,
-        y=plot_df["battery_soc"],
-        name="Battery SOC",
-        fill="tozeroy",
-        line=dict(color=COLORS["battery_charge"], width=2),
-        fillcolor=f"rgba(107, 203, 119, 0.6)",
-    ))
+    # SOC trace
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df.index,
+            y=plot_df["battery_soc"],
+            name="Battery SOC",
+            fill="tozeroy",
+            line=dict(color=COLORS["battery_charge"], width=2),
+            fillcolor="rgba(107, 203, 119, 0.5)",
+        ),
+        row=1, col=1
+    )
+    
+    # Charging (positive) and Discharging (negative) activity
+    if "battery_charge_kwh" in plot_df.columns and "battery_discharge_kwh" in plot_df.columns:
+        # Convert to power (kW) for better visualization
+        charge_power = plot_df["battery_charge_kwh"] * 4  # kWh per 15-min → kW
+        discharge_power = -plot_df["battery_discharge_kwh"] * 4  # Negative for discharge
+        
+        # Show charging (green, positive)
+        fig.add_trace(
+            go.Bar(
+                x=plot_df.index,
+                y=charge_power,
+                name="Charging",
+                marker_color="rgba(107, 203, 119, 0.8)",
+                hovertemplate="Charging: %{y:.2f} kW<extra></extra>",
+            ),
+            row=2, col=1
+        )
+        
+        # Show discharging (blue, negative)
+        fig.add_trace(
+            go.Bar(
+                x=plot_df.index,
+                y=discharge_power,
+                name="Discharging",
+                marker_color="rgba(77, 150, 255, 0.8)",
+                hovertemplate="Discharging: %{y:.2f} kW<extra></extra>",
+            ),
+            row=2, col=1
+        )
     
     fig.update_layout(
-        title=dict(
-            text="Battery State of Charge",
-            font=dict(size=18),
-        ),
-        xaxis_title="Time",
-        yaxis_title="Energy (kWh)",
-        height=300,
+        height=400,
         template="plotly_white",
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        hovermode="x unified",
+        barmode="relative",
     )
+    
+    fig.update_yaxes(title_text="Energy (kWh)", row=1, col=1)
+    fig.update_yaxes(title_text="Power (kW)", row=2, col=1)
+    fig.update_xaxes(title_text="Time", row=2, col=1)
     
     return fig
 

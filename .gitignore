@@ -1,4 +1,4 @@
 *.pdf
 *.zip
-
+.env
 */__pycache__/*

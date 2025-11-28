@@ -95,24 +95,21 @@ USABLE_ROOF_FRACTION = {
 
 @dataclass
 class PVSizingConfig:
-    """Configuration for PV system sizing based on property details."""
+    """Configuration for PV system sizing based on roof characteristics."""
     roof_surface_m2: float = 50.0
     roof_type: RoofType = RoofType.GABLE
     use_both_sides: bool = False  # For gable roofs
     roof_inclination: int = 30  # degrees
     orientation: Orientation = Orientation.SOUTH
-    heat_water: HeatWaterType = HeatWaterType.OTHER
-    heating_system: HeatingSystemType = HeatingSystemType.OTHER
-    cooling: CoolingType = CoolingType.NO
     yearly_consumption_kwh: float = 4000.0
 
 
 def calculate_recommended_pv_size(config: PVSizingConfig) -> Dict[str, Any]:
     """
-    Calculate recommended PV system size based on property configuration.
+    Calculate recommended PV system size based on roof configuration.
     
     Args:
-        config: PV sizing configuration with property details
+        config: PV sizing configuration with roof details
         
     Returns:
         Dictionary with recommended size, max possible, and factors
@@ -158,34 +155,11 @@ def calculate_recommended_pv_size(config: PVSizingConfig) -> Dict[str, Any]:
     # Combined efficiency factor
     efficiency_factor = orientation_factor * inclination_factor
     
-    # Calculate consumption-based recommendation
     # Rule of thumb: 1 kWp produces ~950 kWh/year in Luxembourg
-    # Aim for 80-100% coverage of yearly consumption (adjusted by efficiency)
     annual_yield_per_kwp = 950 * efficiency_factor
     
-    # Adjust consumption based on heating/water systems
-    adjusted_consumption = config.yearly_consumption_kwh
-    
-    # Electric heating increases consumption significantly
-    if config.heating_system == HeatingSystemType.ELECTRIC:
-        adjusted_consumption *= 0.6  # Only cover part, heating is winter-heavy
-    elif config.heating_system == HeatingSystemType.HEAT_PUMP:
-        adjusted_consumption *= 0.8  # Heat pumps are more efficient
-    
-    # Hot water systems
-    if config.heat_water == HeatWaterType.ELECTRIC_BOILER:
-        adjusted_consumption += 1500  # Typical electric water heating
-    elif config.heat_water == HeatWaterType.HEAT_PUMP_BOILER:
-        adjusted_consumption += 500   # Efficient heat pump water heating
-    
-    # Cooling adds summer consumption (when PV is most productive)
-    if config.cooling == CoolingType.YES:
-        adjusted_consumption += 800
-    elif config.cooling == CoolingType.SOMETIMES:
-        adjusted_consumption += 300
-    
-    # Calculate ideal size to cover consumption
-    ideal_size_for_consumption = adjusted_consumption / annual_yield_per_kwp
+    # Calculate ideal size to cover consumption (aim for ~100% coverage)
+    ideal_size_for_consumption = config.yearly_consumption_kwh / annual_yield_per_kwp
     
     # Recommended size is minimum of roof capacity and consumption-based ideal
     recommended_kwp = min(max_capacity_from_roof, ideal_size_for_consumption)
@@ -204,7 +178,6 @@ def calculate_recommended_pv_size(config: PVSizingConfig) -> Dict[str, Any]:
         "efficiency_factor": round(efficiency_factor, 2),
         "orientation_factor": round(orientation_factor, 2),
         "inclination_factor": round(inclination_factor, 2),
-        "adjusted_consumption_kwh": round(adjusted_consumption, 0),
         "estimated_annual_production_kwh": round(recommended_kwp * annual_yield_per_kwp, 0),
         "coverage_percent": round(
             (recommended_kwp * annual_yield_per_kwp / config.yearly_consumption_kwh) * 100, 0
@@ -237,12 +210,13 @@ class Battery:
 @dataclass
 class EV:
     """Electric vehicle configuration."""
-    annual_km: int = 0
+    battery_capacity_kwh: float = 60.0  # Typical EV battery size
     enabled: bool = False
-    consumption_per_100km: float = 18.0  # kWh
-    charging_power_kw: float = 7.4
+    charging_power_kw: float = 4.0  # Home charger power (typical single-phase)
     charging_start_hour: int = 18
     charging_end_hour: int = 7  # Next day
+    starting_soc_pct: float = 0.40  # Assume EV arrives home at 40% SOC
+    target_soc_pct: float = 0.80  # Charge to 80% (better for battery longevity)
 
 
 # Default solar generation profile (fraction of peak by hour)
@@ -344,51 +318,80 @@ def simulate_ev_consumption(
     config: Optional[Dict[str, Any]] = None
 ) -> pd.DataFrame:
     """
-    Simulate EV charging load based on annual driving distance.
+    Simulate EV charging based on battery capacity and charging schedule.
+    
+    The EV arrives home each day at the charging start hour with a depleted
+    battery (starting_soc_pct) and charges until reaching target_soc_pct
+    or until the charging window ends.
     
     Args:
         df: DataFrame with timestamp index
-        ev: EV configuration
+        ev: EV configuration with battery capacity and charging schedule
         config: Optional tariff config with EV parameters
     
     Returns:
-        DataFrame with additional ev_consumption_kwh column
+        DataFrame with ev_consumption_kwh and ev_soc columns
     """
     result = df.copy()
     
-    if not ev.enabled or ev.annual_km <= 0:
+    if not ev.enabled or ev.battery_capacity_kwh <= 0:
         result["ev_consumption_kwh"] = 0.0
+        result["ev_soc"] = 0.0
         return result
     
-    # Calculate total annual energy needed for EV
-    annual_ev_kwh = (ev.annual_km / 100) * ev.consumption_per_100km
-    
-    # Determine charging hours
     hours = result.index.hour
+    n = len(result)
     
-    # Create charging window mask
-    if ev.charging_start_hour > ev.charging_end_hour:
-        # Overnight charging (e.g., 18:00 to 07:00)
-        is_charging_hour = (hours >= ev.charging_start_hour) | (hours < ev.charging_end_hour)
-    else:
-        is_charging_hour = (hours >= ev.charging_start_hour) & (hours < ev.charging_end_hour)
+    # Energy needed per charging session (from starting SOC to target SOC)
+    energy_needed_per_session = ev.battery_capacity_kwh * (ev.target_soc_pct - ev.starting_soc_pct)
     
-    # Count charging intervals per year
-    charging_intervals = is_charging_hour.sum()
+    # Maximum energy per 15-min interval based on charging power
+    max_energy_per_interval = ev.charging_power_kw * 0.25  # kWh per 15-min
     
-    # Energy per charging interval
-    if charging_intervals > 0:
-        # Distribute annual consumption evenly across charging periods
-        # But cap at max charging power
-        energy_per_interval = annual_ev_kwh / charging_intervals
-        max_per_interval = ev.charging_power_kw * 0.25  # 15-min interval
-        energy_per_interval = min(energy_per_interval, max_per_interval)
+    # Initialize arrays
+    ev_consumption = np.zeros(n)
+    ev_soc = np.zeros(n)
+    
+    # Track current EV SOC within a charging session
+    current_ev_soc = 0.0  # Not at home initially
+    is_charging_session_active = False
+    
+    for i in range(n):
+        hour = hours[i]
         
-        ev_consumption = np.where(is_charging_hour, energy_per_interval, 0.0)
-    else:
-        ev_consumption = np.zeros(len(result))
+        # Check if we're in the charging window
+        if ev.charging_start_hour > ev.charging_end_hour:
+            # Overnight charging (e.g., 18:00 to 07:00)
+            in_charging_window = (hour >= ev.charging_start_hour) or (hour < ev.charging_end_hour)
+        else:
+            in_charging_window = (ev.charging_start_hour <= hour < ev.charging_end_hour)
+        
+        # Detect start of new charging session (EV arrives home)
+        if in_charging_window:
+            # Check if this is the first interval of a new session
+            if not is_charging_session_active:
+                # New day's charging session starts - EV arrives at starting_soc_pct
+                current_ev_soc = ev.battery_capacity_kwh * ev.starting_soc_pct
+                is_charging_session_active = True
+            
+            # Calculate how much more we need to charge
+            target_energy = ev.battery_capacity_kwh * ev.target_soc_pct
+            energy_to_target = target_energy - current_ev_soc
+            
+            if energy_to_target > 0:
+                # Charge the EV (limited by charging power and remaining need)
+                charge_amount = min(max_energy_per_interval, energy_to_target)
+                ev_consumption[i] = charge_amount
+                current_ev_soc += charge_amount
+            
+            ev_soc[i] = current_ev_soc
+        else:
+            # Outside charging window - EV is away or not charging
+            is_charging_session_active = False
+            ev_soc[i] = 0.0  # EV not at home / not connected
     
     result["ev_consumption_kwh"] = ev_consumption
+    result["ev_soc"] = ev_soc
     
     return result
 
@@ -473,6 +476,12 @@ def calculate_grid_exchange(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate grid import and export after all assets.
     
+    The battery stores EXCESS PV (reduces export) and provides power when 
+    needed (reduces import). Grid exchange is calculated as:
+    
+    - Grid Import = What we still need after PV and battery discharge
+    - Grid Export = Excess PV that couldn't be stored in battery
+    
     Args:
         df: DataFrame with all consumption and generation columns
     
@@ -487,24 +496,29 @@ def calculate_grid_exchange(df: pd.DataFrame) -> pd.DataFrame:
         if col not in result.columns:
             result[col] = 0.0
     
-    # Total consumption from grid perspective
-    total_consumption = (
-        result["consumption_kwh"] 
-        + result["ev_consumption_kwh"]
-        + result["battery_charge_kwh"]
-    )
+    # Total load (what the house + EV needs)
+    total_load = result["consumption_kwh"] + result["ev_consumption_kwh"]
     
-    # Total generation/supply to house
-    total_generation = (
-        result["pv_generation_kwh"]
-        + result["battery_discharge_kwh"]
-    )
+    # Net load after PV (positive = need more, negative = excess PV)
+    net_after_pv = total_load - result["pv_generation_kwh"]
     
-    # Net position with grid
-    net_grid = total_consumption - total_generation
+    # Battery helps by:
+    # - Discharging when we need power (reduces import)
+    # - Charging from excess PV (reduces export)
     
-    result["grid_import_kwh"] = np.maximum(net_grid, 0)
-    result["grid_export_kwh"] = np.maximum(-net_grid, 0)
+    # Final grid position:
+    # - We import when: net_after_pv > battery_discharge (still need more)
+    # - We export when: excess_pv > battery_charge (couldn't store it all)
+    
+    # Grid import = load - pv - battery_discharge (if positive)
+    grid_import = net_after_pv - result["battery_discharge_kwh"]
+    result["grid_import_kwh"] = np.maximum(grid_import, 0)
+    
+    # Grid export = pv - load - battery_charge (if positive)  
+    # This is the excess PV that didn't go to load or battery
+    excess_pv = -net_after_pv  # Positive when PV > load
+    grid_export = excess_pv - result["battery_charge_kwh"]
+    result["grid_export_kwh"] = np.maximum(grid_export, 0)
     
     return result
 
@@ -565,6 +579,10 @@ def get_self_sufficiency_metrics(df: pd.DataFrame) -> Dict[str, float]:
     grid_import = df.get("grid_import_kwh", pd.Series([total_load])).sum()
     grid_export = df.get("grid_export_kwh", pd.Series([0])).sum()
     
+    # Battery metrics
+    battery_charge = df.get("battery_charge_kwh", pd.Series([0])).sum()
+    battery_discharge = df.get("battery_discharge_kwh", pd.Series([0])).sum()
+    
     # Self-sufficiency: % of consumption covered by own generation
     if total_load > 0:
         self_sufficiency = (1 - grid_import / total_load) * 100
@@ -584,5 +602,7 @@ def get_self_sufficiency_metrics(df: pd.DataFrame) -> Dict[str, float]:
         "grid_import_kwh": round(grid_import, 1),
         "grid_export_kwh": round(grid_export, 1),
         "total_consumption_kwh": round(total_load, 1),
+        "battery_charged_kwh": round(battery_charge, 1),
+        "battery_discharged_kwh": round(battery_discharge, 1),
     }
 
